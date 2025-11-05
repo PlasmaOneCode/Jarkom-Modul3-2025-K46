@@ -796,6 +796,90 @@ Serangan Penuh: -n 2000 -c 100 (2000 permintaan, 100 bersamaan). Pantau kondisi 
 Strategi Bertahan: Tambahkan weight dalam algoritma, kemudian catat apakah lebih baik atau tidak._
 
 ### Langkah Pengerjaan
+1. Jalankan script berikut
+```
+#!/bin/bash
+# Jalankan di Elros
+set -euo pipefail
+
+apt-get update -y
+apt-get install -y apache2-utils
+
+cat > /etc/nginx/sites-available/laravel-lb <<'EOF'
+upstream kesatria_numenor {
+    server 192.234.1.11:8001 weight=3;  # Elendil - 60%
+    server 192.234.1.12:8002 weight=1;  # Isildur - 20%
+    server 192.234.1.13:8003 weight=1;  # Anarion - 20%
+}
+
+server {
+    listen 80;
+    server_name elros.k46.com;
+
+    if ($host !~* ^elros\.k46\.com$) {
+        return 444;
+    }
+
+    location / {
+        proxy_pass http://kesatria_numenor;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    access_log /var/log/nginx/elros_access.log;
+    error_log /var/log/nginx/elros_error.log;
+}
+EOF
+
+nginx -t && service nginx restart
+
+echo "Tes"
+echo "ab -n 100 -c 10 http://elros.k46.com/api/airing"
+echo "ab -n 2000 -c 100 http://elros.k46.com/api/airing"
+echo "Periksa log di Elros:"
+echo "  tail -100 /var/log/nginx/elros_access.log"
+echo "Cek distribusi beban:"
+echo "  grep 'GET /api/airing' /var/log/nginx/elros_access.log | wc -l"
+echo ""
+```
+2. Tes serangan awal
+```
+ab -n 100 -c 10 http://elros.k46.com/api/airing
+```
+![](images/11-awal.png)
+3. Tes serangan penuh
+```
+ab -n 2000 -c 100 http://elros.k46.com/api/airing
+```
+![](images/11-penuh.png)
+4. Cek log di Elros
+```
+tail -100 /var/log/nginx/elros_access.log
+```
+![](images/11-log.png)
+### Penjelasan
+```
+upstream kesatria_numenor {
+    server 192.234.1.11:8001 weight=3;  # Elendil - 60%
+    server 192.234.1.12:8002 weight=1;  # Isildur - 20%
+    server 192.234.1.13:8003 weight=1;  # Anarion - 20%
+}
+```
+- Tujuan: Mendefinisikan sekelompok server backend yang akan menerima lalu lintas.
+- Metode Load Balancing: Menggunakan algoritma Weighted Round-Robin secara default.
+- - Elendil (192.234.1.11:8001) memiliki weight=3.
+  - Isildur (192.234.1.12:8002) memiliki weight=1.
+  - Anarion (192.234.1.13:8003) memiliki weight=1.
+- Distribusi Beban: Total weight adalah $3 + 1 + 1 = 5$.
+- - Elendil akan menerima $3/5$ atau 60% dari lalu lintas.
+  - Isildur akan menerima $1/5$ atau 20% dari lalu lintas.
+  - Anarion akan menerima $1/5$ atau 20% dari lalu lintas.
 
 ## soal_12
 _Para Penguasa Peri (Galadriel, Celeborn, Oropher) membangun taman digital mereka menggunakan PHP. Instal nginx dan php8.4-fpm di setiap node worker PHP. Buat file index.php sederhana di /var/www/html masing-masing yang menampilkan nama hostname mereka. Buat agar akses web hanya bisa melalui domain nama, tidak bisa melalui ip._
