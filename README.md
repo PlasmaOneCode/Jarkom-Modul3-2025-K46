@@ -461,6 +461,206 @@ _Ratu Erendis, sang pembuat peta, menetapkan nama resmi untuk wilayah utama (<xx
 
 ### Langkah Pengerjaan
 
+Pertama menjalankan script dan konfigurasi pada Erendis. Untuk mengisi Erendis sebagai DNS master dengan berikut :
+
+        DOMAIN="k46"
+        TLD="com"
+        MASTER_IP="192.234.4.12"
+        SLAVE_IP="192.234.4.13"
+        FORWARDER="192.234.5.10"   # Minastir
+        
+        
+        SERIAL=$(date +%Y%m%d%H)
+
+
+Install bind9:
+
+        apt-get update -y
+        apt-get install -y bind9 bind9utils bind9-doc dnsutils
+
+
+Mengisi named.conf.options (forwarder -> Minastir) :
+
+        cat > /etc/bind/named.conf.options <<EOF
+        options {
+            directory "/var/cache/bind";
+            forwarders { ${FORWARDER}; };
+            allow-query { any; };
+            recursion yes;
+            listen-on { any; };
+        };
+        EOF
+
+
+Mengisi named.conf.local (master zone) :
+
+        cat > /etc/bind/named.conf.local <<EOF
+        zone "${DOMAIN}.${TLD}" {
+            type master;
+            file "/etc/bind/db.${DOMAIN}.${TLD}";
+            allow-transfer { ${SLAVE_IP}; };
+            also-notify { ${SLAVE_IP}; };
+        };
+        EOF
+
+
+Membuat file zone /etc/bind/db.${DOMAIN}.${TLD} :
+
+        cat > /etc/bind/db.${DOMAIN}.${TLD} <<EOF
+        \$TTL    604800
+        @       IN      SOA     ns1.${DOMAIN}.${TLD}. root.${DOMAIN}.${TLD}. (
+                                ${SERIAL} ; Serial
+                                604800     ; Refresh
+                                86400      ; Retry
+                                2419200    ; Expire
+                                604800 )   ; Negative Cache TTL
+        
+        
+        ; Name Servers
+        @       IN      NS      ns1.${DOMAIN}.${TLD}.
+        @       IN      NS      ns2.${DOMAIN}.${TLD}.
+        ns1     IN      A       ${MASTER_IP}
+        ns2     IN      A       ${SLAVE_IP}
+        
+        
+        ; Important hosts (sesuaikan jika perlu)
+        palantir    IN  A   192.234.3.12
+        elros       IN  A   192.234.1.16
+        pharazon    IN  A   192.234.2.13
+        elendil     IN  A   192.234.1.11
+        isildur     IN  A   192.234.1.12
+        anarion     IN  A   192.234.1.13
+        galadriel   IN  A   192.234.2.21
+        celeborn    IN  A   192.234.2.22
+        oropher     IN  A   192.234.2.23
+        EOF
+
+
+Memastikan file permission benar dengan berikut :
+
+        chown root:bind /etc/bind/db.${DOMAIN}.${TLD}
+        chmod 644 /etc/bind/db.${DOMAIN}.${TLD}
+
+
+Mengecek file zona sebelum start named dengan menggunakan :
+
+        if ! named-checkzone ${DOMAIN}.${TLD} /etc/bind/db.${DOMAIN}.${TLD} >/dev/null 2>&1; then
+          echo "ERROR: named-checkzone gagal. Tampilkan kesalahan:"
+          named-checkzone ${DOMAIN}.${TLD} /etc/bind/db.${DOMAIN}.${TLD}
+          exit 1
+        fi
+
+
+Melakukan backup resolv.conf lalu set resolver lokal :
+
+        cp -n /etc/resolv.conf /etc/resolv.conf.bak || true
+        echo "nameserver 127.0.0.1" > /etc/resolv.conf
+
+
+Untuk memastikan slave bisa melakukan AXFR (terima TCP/53 & UDP/53 dari slave) bisa dengan menulis :
+
+        iptables -C INPUT -p tcp -s ${SLAVE_IP} --dport 53 -j ACCEPT 2>/dev/null || \
+          iptables -I INPUT -p tcp -s ${SLAVE_IP} --dport 53 -j ACCEPT
+        iptables -C INPUT -p udp -s ${SLAVE_IP} --dport 53 -j ACCEPT 2>/dev/null || \
+          iptables -I INPUT -p udp -s ${SLAVE_IP} --dport 53 -j ACCEPT
+
+
+Menjalankan named menggunakan command berikut :
+
+        pkill named 2>/dev/null || true
+        /usr/sbin/named -f -g &>/var/log/named-erendis.log &
+        sleep 1
+
+
+Melakukan verifikasi, apakah untuk soal 4 sudah dijalankan dengan benar :
+
+        dig SOA ${DOMAIN}.${TLD} @127.0.0.1 +noall +answer || true
+
+Untuk menjadikan Amdir sebagai DNS slave bisa dimulai dengan berikut :
+
+        DOMAIN="k46"
+        TLD="com"
+        MASTER_IP="192.234.4.12"
+        SLAVE_IP="192.234.4.13"
+        FORWARDER="192.234.5.10"   # Minastir
+
+
+Install bind9 agar bisa jalan :
+
+        apt-get update -y
+        apt-get install -y bind9 bind9utils bind9-doc dnsutils
+
+
+Mengisi named.conf.options (forwarder -> Minastir) :
+
+        cat > /etc/bind/named.conf.options <<EOF
+        options {
+            directory "/var/cache/bind";
+            forwarders { ${FORWARDER}; };
+            allow-query { any; };
+            recursion yes;
+            listen-on { any; };
+        };
+        EOF
+
+
+Mengisi named.conf.local (slave zone config) :
+
+        cat > /etc/bind/named.conf.local <<EOF
+        zone "${DOMAIN}.${TLD}" {
+            type slave;
+            masters { ${MASTER_IP}; };
+            file "/var/lib/bind/db.${DOMAIN}.${TLD}";
+        };
+        EOF
+
+
+Memastikan direktori tujuan ada :
+
+        mkdir -p /var/lib/bind
+        chown bind:bind /var/lib/bind || true
+        chmod 755 /var/lib/bind
+
+
+Melakukan backup resolv.conf sebelum menggantikannya :
+        
+        cp -n /etc/resolv.conf /etc/resolv.conf.bak || true
+        echo "nameserver 127.0.0.1" > /etc/resolv.conf
+
+
+Menjalankan proses named :
+        
+        pkill named 2>/dev/null || true
+        /usr/sbin/named -f -g &>/var/log/named-amdir.log &
+
+Memastikan bahwa slave zone file ada :
+
+        sleep 3
+        if [ -f /var/lib/bind/db.${DOMAIN}.${TLD} ]; then
+          echo "Slave zone file exists:"
+          ls -l /var/lib/bind/db.${DOMAIN}.${TLD}
+        else
+          echo "Slave zone file belum ada — slave akan mencoba AXFR dari master jika master reachable & allow-transfer diaktifkan."
+        fi
+        sleep 3
+
+
+Memeriksa file slave: ls -l /var/lib/bind/db.${DOMAIN}.${TLD} :
+
+        ls -l /var/lib/bind/db.${DOMAIN}.${TLD} || echo "Belum ada file zona (slave akan menarik dari master otomatis jika master reachable & allow-transfer diaktifkan)."
+
+
+Verifikasi:\n - di Amdir: dig SOA ${DOMAIN}.${TLD} @127.0.0.1\n - di Amdir (AXFR test dari master): dig @${MASTER_IP} ${DOMAIN}.${TLD} AXFR :
+
+        dig SOA ${DOMAIN}.${TLD} @127.0.0.1 +noall +answer || true
+
+Jika transfer belum terjadi, pastikan master (Erendis) reachable dari Amdir: ping ${MASTER_IP}
+
+<img width="779" height="645" alt="image" src="https://github.com/user-attachments/assets/97932a73-695e-4705-bd7f-04ea6a70d096" />
+
+<img width="779" height="310" alt="image" src="https://github.com/user-attachments/assets/1692cb78-fde2-41eb-a574-9c6b676678b9" />
+
+<img width="778" height="156" alt="image" src="https://github.com/user-attachments/assets/0d26ecd2-94cf-482e-b3d0-8b90383612bb" />
 
 
 ## soal_5
@@ -478,6 +678,93 @@ _Batas waktu maksimal peminjaman untuk semua adalah satu jam._
 
 ### Langkah Pengerjaan
 
+Soal ini meminta untuk membatasi leasing time jadi setengah jam, seperenam jam, atau satu jam. Di Aldarion, dijalankan berikut :
+
+        DHCP_CONF="/etc/dhcp/dhcpd.conf"
+        BACKUP="${DHCP_CONF}.$(date +%s).bak"
+
+Backup existing dhcpd.conf -> $BACKUP :
+
+        cp -n "$DHCP_CONF" "$BACKUP" 2>/dev/null || true
+
+Memasukkan ke DHCP Config :
+
+        cat > "$DHCP_CONF" <<'EOF'
+        # === DHCP SERVER K46 ===
+        ddns-update-style none;
+        option domain-name "numenor.lab";
+        option domain-name-servers 192.234.5.10;  # Minastir
+        default-lease-time 600;
+        max-lease-time 3600;
+        authoritative;
+        
+        # Manusia: lease 30 menit (1800s)
+        subnet 192.234.1.0 netmask 255.255.255.0 {
+            range 192.234.1.6 192.234.1.34;
+            range 192.234.1.68 192.234.1.94;
+            option routers 192.234.1.1;
+            option broadcast-address 192.234.1.255;
+            option domain-name-servers 192.234.5.10;
+            default-lease-time 1800;
+            max-lease-time 3600;
+        }
+        
+        # Peri: lease 10 menit (600s)
+        subnet 192.234.2.0 netmask 255.255.255.0 {
+            range 192.234.2.35 192.234.2.67;
+            range 192.234.2.96 192.234.2.121;
+            option routers 192.234.2.1;
+            option broadcast-address 192.234.2.255;
+            option domain-name-servers 192.234.5.10;
+            default-lease-time 600;
+            max-lease-time 3600;
+        }
+        
+        # internal Aldarion subnet
+        subnet 192.234.3.0 netmask 255.255.255.0 {
+            option routers 192.234.3.1;
+            option broadcast-address 192.234.3.255;
+            option domain-name-servers 192.234.5.10;
+        }
+        
+        # other subnets (no change)
+        subnet 192.234.4.0 netmask 255.255.255.0 {
+            option routers 192.234.4.1;
+            option broadcast-address 192.234.4.255;
+            option domain-name-servers 192.234.5.10;
+        }
+        
+        host khamul {
+            hardware ethernet 02:42:ac:11:00:01;
+            fixed-address 192.234.3.95;
+            option routers 192.234.3.1;
+            option domain-name-servers 192.234.5.10;
+        }
+        EOF
+
+Memastikan directories peminjaman ada :
+
+        mkdir -p /var/lib/dhcp
+        touch /var/lib/dhcp/dhcpd.leases
+        chown root:root /var/lib/dhcp/dhcpd.leases
+        chmod 644 /var/lib/dhcp/dhcpd.leases
+
+Melakukan restart DHCP server (try service/init.d fallback) :
+
+        service isc-dhcp-server restart 2>/dev/null || service dhcpd restart 2>/dev/null || /usr/sbin/dhcpd -4 -cf "$DHCP_CONF" eth0 2>/dev/null || true
+
+Server dipastikan bekerja menggunakan command berikut :
+
+        # pastikan nilai lease ada
+        grep -n "default-lease-time" /etc/dhcp/dhcpd.conf
+        
+        # pastikan dhcpd jalan
+        ps aux | grep dhcpd | grep -v grep || echo "dhcpd tidak jalan"
+        
+        # lihat lease file (client yang sudah mendapat IP)
+        cat /var/lib/dhcp/dhcpd.leases | tail -n 30
+
+<img width="953" height="874" alt="image" src="https://github.com/user-attachments/assets/51417771-868e-4890-a70a-32d292de8166" />
 
 
 ## soal_7
