@@ -461,6 +461,206 @@ _Ratu Erendis, sang pembuat peta, menetapkan nama resmi untuk wilayah utama (<xx
 
 ### Langkah Pengerjaan
 
+Pertama menjalankan script dan konfigurasi pada Erendis. Untuk mengisi Erendis sebagai DNS master dengan berikut :
+
+        DOMAIN="k46"
+        TLD="com"
+        MASTER_IP="192.234.4.12"
+        SLAVE_IP="192.234.4.13"
+        FORWARDER="192.234.5.10"   # Minastir
+        
+        
+        SERIAL=$(date +%Y%m%d%H)
+
+
+Install bind9:
+
+        apt-get update -y
+        apt-get install -y bind9 bind9utils bind9-doc dnsutils
+
+
+Mengisi named.conf.options (forwarder -> Minastir) :
+
+        cat > /etc/bind/named.conf.options <<EOF
+        options {
+            directory "/var/cache/bind";
+            forwarders { ${FORWARDER}; };
+            allow-query { any; };
+            recursion yes;
+            listen-on { any; };
+        };
+        EOF
+
+
+Mengisi named.conf.local (master zone) :
+
+        cat > /etc/bind/named.conf.local <<EOF
+        zone "${DOMAIN}.${TLD}" {
+            type master;
+            file "/etc/bind/db.${DOMAIN}.${TLD}";
+            allow-transfer { ${SLAVE_IP}; };
+            also-notify { ${SLAVE_IP}; };
+        };
+        EOF
+
+
+Membuat file zone /etc/bind/db.${DOMAIN}.${TLD} :
+
+        cat > /etc/bind/db.${DOMAIN}.${TLD} <<EOF
+        \$TTL    604800
+        @       IN      SOA     ns1.${DOMAIN}.${TLD}. root.${DOMAIN}.${TLD}. (
+                                ${SERIAL} ; Serial
+                                604800     ; Refresh
+                                86400      ; Retry
+                                2419200    ; Expire
+                                604800 )   ; Negative Cache TTL
+        
+        
+        ; Name Servers
+        @       IN      NS      ns1.${DOMAIN}.${TLD}.
+        @       IN      NS      ns2.${DOMAIN}.${TLD}.
+        ns1     IN      A       ${MASTER_IP}
+        ns2     IN      A       ${SLAVE_IP}
+        
+        
+        ; Important hosts (sesuaikan jika perlu)
+        palantir    IN  A   192.234.3.12
+        elros       IN  A   192.234.1.16
+        pharazon    IN  A   192.234.2.13
+        elendil     IN  A   192.234.1.11
+        isildur     IN  A   192.234.1.12
+        anarion     IN  A   192.234.1.13
+        galadriel   IN  A   192.234.2.21
+        celeborn    IN  A   192.234.2.22
+        oropher     IN  A   192.234.2.23
+        EOF
+
+
+Memastikan file permission benar dengan berikut :
+
+        chown root:bind /etc/bind/db.${DOMAIN}.${TLD}
+        chmod 644 /etc/bind/db.${DOMAIN}.${TLD}
+
+
+Mengecek file zona sebelum start named dengan menggunakan :
+
+        if ! named-checkzone ${DOMAIN}.${TLD} /etc/bind/db.${DOMAIN}.${TLD} >/dev/null 2>&1; then
+          echo "ERROR: named-checkzone gagal. Tampilkan kesalahan:"
+          named-checkzone ${DOMAIN}.${TLD} /etc/bind/db.${DOMAIN}.${TLD}
+          exit 1
+        fi
+
+
+Melakukan backup resolv.conf lalu set resolver lokal :
+
+        cp -n /etc/resolv.conf /etc/resolv.conf.bak || true
+        echo "nameserver 127.0.0.1" > /etc/resolv.conf
+
+
+Untuk memastikan slave bisa melakukan AXFR (terima TCP/53 & UDP/53 dari slave) bisa dengan menulis :
+
+        iptables -C INPUT -p tcp -s ${SLAVE_IP} --dport 53 -j ACCEPT 2>/dev/null || \
+          iptables -I INPUT -p tcp -s ${SLAVE_IP} --dport 53 -j ACCEPT
+        iptables -C INPUT -p udp -s ${SLAVE_IP} --dport 53 -j ACCEPT 2>/dev/null || \
+          iptables -I INPUT -p udp -s ${SLAVE_IP} --dport 53 -j ACCEPT
+
+
+Menjalankan named menggunakan command berikut :
+
+        pkill named 2>/dev/null || true
+        /usr/sbin/named -f -g &>/var/log/named-erendis.log &
+        sleep 1
+
+
+Melakukan verifikasi, apakah untuk soal 4 sudah dijalankan dengan benar :
+
+        dig SOA ${DOMAIN}.${TLD} @127.0.0.1 +noall +answer || true
+
+Untuk menjadikan Amdir sebagai DNS slave bisa dimulai dengan berikut :
+
+        DOMAIN="k46"
+        TLD="com"
+        MASTER_IP="192.234.4.12"
+        SLAVE_IP="192.234.4.13"
+        FORWARDER="192.234.5.10"   # Minastir
+
+
+Install bind9 agar bisa jalan :
+
+        apt-get update -y
+        apt-get install -y bind9 bind9utils bind9-doc dnsutils
+
+
+Mengisi named.conf.options (forwarder -> Minastir) :
+
+        cat > /etc/bind/named.conf.options <<EOF
+        options {
+            directory "/var/cache/bind";
+            forwarders { ${FORWARDER}; };
+            allow-query { any; };
+            recursion yes;
+            listen-on { any; };
+        };
+        EOF
+
+
+Mengisi named.conf.local (slave zone config) :
+
+        cat > /etc/bind/named.conf.local <<EOF
+        zone "${DOMAIN}.${TLD}" {
+            type slave;
+            masters { ${MASTER_IP}; };
+            file "/var/lib/bind/db.${DOMAIN}.${TLD}";
+        };
+        EOF
+
+
+Memastikan direktori tujuan ada :
+
+        mkdir -p /var/lib/bind
+        chown bind:bind /var/lib/bind || true
+        chmod 755 /var/lib/bind
+
+
+Melakukan backup resolv.conf sebelum menggantikannya :
+        
+        cp -n /etc/resolv.conf /etc/resolv.conf.bak || true
+        echo "nameserver 127.0.0.1" > /etc/resolv.conf
+
+
+Menjalankan proses named :
+        
+        pkill named 2>/dev/null || true
+        /usr/sbin/named -f -g &>/var/log/named-amdir.log &
+
+Memastikan bahwa slave zone file ada :
+
+        sleep 3
+        if [ -f /var/lib/bind/db.${DOMAIN}.${TLD} ]; then
+          echo "Slave zone file exists:"
+          ls -l /var/lib/bind/db.${DOMAIN}.${TLD}
+        else
+          echo "Slave zone file belum ada — slave akan mencoba AXFR dari master jika master reachable & allow-transfer diaktifkan."
+        fi
+        sleep 3
+
+
+Memeriksa file slave: ls -l /var/lib/bind/db.${DOMAIN}.${TLD} :
+
+        ls -l /var/lib/bind/db.${DOMAIN}.${TLD} || echo "Belum ada file zona (slave akan menarik dari master otomatis jika master reachable & allow-transfer diaktifkan)."
+
+
+Verifikasi:\n - di Amdir: dig SOA ${DOMAIN}.${TLD} @127.0.0.1\n - di Amdir (AXFR test dari master): dig @${MASTER_IP} ${DOMAIN}.${TLD} AXFR :
+
+        dig SOA ${DOMAIN}.${TLD} @127.0.0.1 +noall +answer || true
+
+Jika transfer belum terjadi, pastikan master (Erendis) reachable dari Amdir: ping ${MASTER_IP}
+
+<img width="779" height="645" alt="image" src="https://github.com/user-attachments/assets/97932a73-695e-4705-bd7f-04ea6a70d096" />
+
+<img width="779" height="310" alt="image" src="https://github.com/user-attachments/assets/1692cb78-fde2-41eb-a574-9c6b676678b9" />
+
+<img width="778" height="156" alt="image" src="https://github.com/user-attachments/assets/0d26ecd2-94cf-482e-b3d0-8b90383612bb" />
 
 
 ## soal_5
