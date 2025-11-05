@@ -678,6 +678,93 @@ _Batas waktu maksimal peminjaman untuk semua adalah satu jam._
 
 ### Langkah Pengerjaan
 
+Soal ini meminta untuk membatasi leasing time jadi setengah jam, seperenam jam, atau satu jam. Di Aldarion, dijalankan berikut :
+
+        DHCP_CONF="/etc/dhcp/dhcpd.conf"
+        BACKUP="${DHCP_CONF}.$(date +%s).bak"
+
+Backup existing dhcpd.conf -> $BACKUP :
+
+        cp -n "$DHCP_CONF" "$BACKUP" 2>/dev/null || true
+
+Memasukkan ke DHCP Config :
+
+        cat > "$DHCP_CONF" <<'EOF'
+        # === DHCP SERVER K46 ===
+        ddns-update-style none;
+        option domain-name "numenor.lab";
+        option domain-name-servers 192.234.5.10;  # Minastir
+        default-lease-time 600;
+        max-lease-time 3600;
+        authoritative;
+        
+        # Manusia: lease 30 menit (1800s)
+        subnet 192.234.1.0 netmask 255.255.255.0 {
+            range 192.234.1.6 192.234.1.34;
+            range 192.234.1.68 192.234.1.94;
+            option routers 192.234.1.1;
+            option broadcast-address 192.234.1.255;
+            option domain-name-servers 192.234.5.10;
+            default-lease-time 1800;
+            max-lease-time 3600;
+        }
+        
+        # Peri: lease 10 menit (600s)
+        subnet 192.234.2.0 netmask 255.255.255.0 {
+            range 192.234.2.35 192.234.2.67;
+            range 192.234.2.96 192.234.2.121;
+            option routers 192.234.2.1;
+            option broadcast-address 192.234.2.255;
+            option domain-name-servers 192.234.5.10;
+            default-lease-time 600;
+            max-lease-time 3600;
+        }
+        
+        # internal Aldarion subnet
+        subnet 192.234.3.0 netmask 255.255.255.0 {
+            option routers 192.234.3.1;
+            option broadcast-address 192.234.3.255;
+            option domain-name-servers 192.234.5.10;
+        }
+        
+        # other subnets (no change)
+        subnet 192.234.4.0 netmask 255.255.255.0 {
+            option routers 192.234.4.1;
+            option broadcast-address 192.234.4.255;
+            option domain-name-servers 192.234.5.10;
+        }
+        
+        host khamul {
+            hardware ethernet 02:42:ac:11:00:01;
+            fixed-address 192.234.3.95;
+            option routers 192.234.3.1;
+            option domain-name-servers 192.234.5.10;
+        }
+        EOF
+
+Memastikan directories peminjaman ada :
+
+        mkdir -p /var/lib/dhcp
+        touch /var/lib/dhcp/dhcpd.leases
+        chown root:root /var/lib/dhcp/dhcpd.leases
+        chmod 644 /var/lib/dhcp/dhcpd.leases
+
+Melakukan restart DHCP server (try service/init.d fallback) :
+
+        service isc-dhcp-server restart 2>/dev/null || service dhcpd restart 2>/dev/null || /usr/sbin/dhcpd -4 -cf "$DHCP_CONF" eth0 2>/dev/null || true
+
+Server dipastikan bekerja menggunakan command berikut :
+
+        # pastikan nilai lease ada
+        grep -n "default-lease-time" /etc/dhcp/dhcpd.conf
+        
+        # pastikan dhcpd jalan
+        ps aux | grep dhcpd | grep -v grep || echo "dhcpd tidak jalan"
+        
+        # lihat lease file (client yang sudah mendapat IP)
+        cat /var/lib/dhcp/dhcpd.leases | tail -n 30
+
+<img width="953" height="874" alt="image" src="https://github.com/user-attachments/assets/51417771-868e-4890-a70a-32d292de8166" />
 
 
 ## soal_7
